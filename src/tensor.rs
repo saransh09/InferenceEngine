@@ -20,7 +20,8 @@ pub enum DataType {
 pub struct Tensor<T> {
     /// Tensor can be 2D / 3D, therefore, using vector to represent the size
     sizes: Vec<usize>,
-
+    /// Stride is the map of the tensor representation in the physical space
+    /// It helps you actually address the data in the tensors
     strides: Vec<usize>,
     dtype: DataType,
     layout: LayoutType,
