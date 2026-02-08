@@ -77,7 +77,6 @@ impl Model {
                 .iter()
                 .map(|s| s.as_u64().unwrap() as usize)
                 .collect();
-            let strides = Model::compute_strides(&shape);
 
             let dtype = DataType::from_str(val.get("dtype").unwrap().as_str().unwrap())?;
 
@@ -90,24 +89,9 @@ impl Model {
 
             self.tensors.insert(
                 name,
-                Tensor::new(shape, strides, tensor::LayoutType::Strided, storage),
+                Tensor::new(shape, tensor::LayoutType::Strided, storage),
             );
         }
         Ok(())
-    }
-
-    fn compute_strides(shape: &Vec<usize>) -> Vec<usize> {
-        shape
-            .iter()
-            .rev()
-            .scan(1, |acc, &dim| {
-                let stride = *acc;
-                *acc *= dim;
-                Some(stride)
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
     }
 }

@@ -94,7 +94,7 @@ impl TensorStorage {
 #[derive(Debug)]
 pub struct Tensor {
     /// Tensor can be 2D / 3D, therefore, using vector to represent the size
-    sizes: Vec<usize>,
+    shape: Vec<usize>,
     /// Stride is the map of the tensor representation in the physical space
     /// It helps you actually address the data in the tensors
     strides: Vec<usize>,
@@ -105,17 +105,28 @@ pub struct Tensor {
 }
 
 impl Tensor {
-    pub fn new(
-        sizes: Vec<usize>,
-        strides: Vec<usize>,
-        layout: LayoutType,
-        storage: TensorStorage,
-    ) -> Self {
+    pub fn new(shape: Vec<usize>, layout: LayoutType, storage: TensorStorage) -> Self {
+        let strides = Tensor::compute_strides(&shape);
         Self {
-            sizes,
+            shape,
             strides,
             layout,
             storage,
         }
+    }
+
+    fn compute_strides(shape: &Vec<usize>) -> Vec<usize> {
+        shape
+            .iter()
+            .rev()
+            .scan(1, |acc, &dim| {
+                let stride = *acc;
+                *acc *= dim;
+                Some(stride)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 }
