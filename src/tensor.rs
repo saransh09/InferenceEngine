@@ -1,8 +1,8 @@
-use anyhow::{Error, Ok, anyhow};
+use anyhow::{Error, Ok};
 use half::{bf16, f16};
-use std::{alloc::LayoutErr, str::FromStr};
+use std::str::FromStr;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum LayoutType {
     Strided,
 }
@@ -57,8 +57,36 @@ pub enum TensorStorage {
     BOOL(Vec<bool>),
 }
 
+macro_rules! from_bytes_impl {
+    ($dtype: expr, $bytes: expr, $($variant:ident => $rust_type:ty),*) => {
+        match $dtype {
+            $(
+                DataType::$variant => {
+                    let data: Vec<$rust_type> = $bytes
+                        .chunks_exact(std::mem::size_of::<$rust_type>())
+                        .map(|c| <$rust_type>::from_le_bytes(c.try_into().unwrap()))
+                        .collect();
+                        Ok(TensorStorage::$variant(data))
+                }
+            )*
+            _ => Err(anyhow::anyhow!("Not implemented for dtype: {:?}", $dtype)),
+        }
+    };
+}
+
+macro_rules! zeros_impl {
+    ($dtype: expr, $count: expr, $($variant:ident => $rust_type:ty),*) => {
+        match $dtype {
+            $(
+                DataType::$variant => Ok(TensorStorage::$variant(vec![<$rust_type>::default(); $count])),
+            )*
+            _ => Err(anyhow::anyhow!("Not implemented for dtype: {:?}", $dtype)),
+        }
+    };
+}
+
 impl TensorStorage {
-    fn dtype(&self) -> DataType {
+    pub fn dtype(&self) -> DataType {
         match self {
             TensorStorage::F64(_) => DataType::F64,
             TensorStorage::F32(_) => DataType::F32,
@@ -74,15 +102,52 @@ impl TensorStorage {
     }
 
     pub fn from_bytes(dtype: &DataType, bytes: &[u8]) -> Result<Self, Error> {
-        match dtype {
-            DataType::F32 => {
-                let data: Vec<f32> = bytes
-                    .chunks_exact(4)
-                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                    .collect();
-                Ok(TensorStorage::F32(data))
-            }
-            _ => Err(anyhow::anyhow!("Not implemented for dtype: {:?}", dtype)),
+        if matches!(dtype, DataType::BOOL) {
+            let data: Vec<bool> = bytes.iter().map(|&b| b != 0).collect();
+            return Ok(TensorStorage::BOOL(data));
+        }
+        from_bytes_impl!(dtype, bytes,
+            F64 => f64,
+            F32 => f32,
+            F16 => f16,
+            BF16 => bf16,
+            I64 => i64,
+            I32 => i32,
+            I16 => i16,
+            I8 => i8,
+            U8 => u8
+        )
+    }
+
+    pub fn zeros(dtype: &DataType, count: usize) -> Result<Self, Error> {
+        if matches!(dtype, DataType::BOOL) {
+            return Ok(TensorStorage::BOOL(vec![false; count]));
+        }
+        zeros_impl!(dtype, count,
+            F64 => f64,
+            F32 => f32,
+            F16 => f16,
+            BF16 => bf16,
+            I64 => i64,
+            I32 => i32,
+            I16 => i16,
+            I8 => i8,
+            U8 => u8
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            TensorStorage::F64(v) => v.len(),
+            TensorStorage::F32(v) => v.len(),
+            TensorStorage::F16(v) => v.len(),
+            TensorStorage::BF16(v) => v.len(),
+            TensorStorage::I64(v) => v.len(),
+            TensorStorage::I32(v) => v.len(),
+            TensorStorage::I16(v) => v.len(),
+            TensorStorage::I8(v) => v.len(),
+            TensorStorage::U8(v) => v.len(),
+            TensorStorage::BOOL(v) => v.len(),
         }
     }
 }
@@ -102,6 +167,33 @@ pub struct Tensor {
     /// Model can have weights of different data types
     /// hence using an enum based pattern matching
     storage: TensorStorage,
+}
+
+/// It was getting too repetitive, so I asked Claude what to do
+/// I was suggested this macro, so I added it here! will use it to learn
+/// in the future, will try to write my own macro!
+macro_rules! elementwise_op {
+    ($a: expr, $b: expr, $op:tt, $($variant:ident),*) => {
+        match ($a, $b) {
+            $( (TensorStorage::$variant(a), TensorStorage::$variant(b)) => {
+                for (x, y) in a.iter_mut().zip(b.iter()) {
+                    *x $op *y;
+                }
+            } )*
+            _ => return Err(anyhow::anyhow!("dtype mismatch or unsupported")),
+        }
+    };
+}
+
+macro_rules! elementwise_binary {
+    ($a:expr, $b:expr, $op:tt, $($variant:ident),*) => {
+        match ($a, $b) {
+            $( (TensorStorage::$variant(a), TensorStorage::$variant(b)) => {
+                TensorStorage::$variant(a.iter().zip(b.iter()).map(|(x,y)| x $op y).collect())
+            } )*
+            _ => return Err(anyhow::anyhow!("dtype mismatch or unsupported")),
+        }
+    };
 }
 
 impl Tensor {
@@ -128,5 +220,55 @@ impl Tensor {
             .into_iter()
             .rev()
             .collect()
+    }
+
+    pub fn add_assign(&mut self, other: &Tensor) -> Result<(), Error> {
+        if self.shape != other.shape {
+            return Err(anyhow::anyhow!("Shape mismatch"));
+        }
+        match (&mut self.storage, &other.storage) {
+            (TensorStorage::F16(a), TensorStorage::F16(b)) => {
+                for (x, y) in a.iter_mut().zip(b.iter()) {
+                    *x = f16::from_f32(x.to_f32() + y.to_f32());
+                }
+            }
+            (TensorStorage::BF16(a), TensorStorage::BF16(b)) => {
+                for (x, y) in a.iter_mut().zip(b.iter()) {
+                    *x = bf16::from_f32(x.to_f32() + y.to_f32());
+                }
+            }
+            _ => {
+                elementwise_op!(&mut self.storage, &other.storage, +=, F64, F32, I64, I32, I16, I8, U8)
+            }
+        }
+        Ok(())
+    }
+
+    pub fn add(&self, other: &Tensor) -> Result<Tensor, Error> {
+        if self.shape != other.shape {
+            return Err(anyhow::anyhow!("Shape mismatch"));
+        }
+        let storage = match (&self.storage, &other.storage) {
+            (TensorStorage::F16(a), TensorStorage::F16(b)) => TensorStorage::F16(
+                a.iter()
+                    .zip(b.iter())
+                    .map(|(x, y)| f16::from_f32(x.to_f32() + y.to_f32()))
+                    .collect(),
+            ),
+            (TensorStorage::BF16(a), TensorStorage::BF16(b)) => TensorStorage::BF16(
+                a.iter()
+                    .zip(b.iter())
+                    .map(|(x, y)| bf16::from_f32(x.to_f32() + y.to_f32()))
+                    .collect(),
+            ),
+            _ => {
+                elementwise_binary!(&self.storage, &other.storage, +, F64, F32, I64, I32, I16, I8, U8)
+            }
+        };
+        Ok(Tensor::new(
+            self.shape.clone(),
+            self.layout.clone(),
+            storage,
+        ))
     }
 }
