@@ -1,10 +1,7 @@
-use crate::tensor::{Tensor, TensorStorage};
+use crate::tensor::{self, DataType, Tensor, TensorStorage};
 use anyhow::{Error, Ok};
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufReader, Read},
-};
+use memmap2::Mmap;
+use std::{collections::HashMap, fs::File, str::FromStr};
 
 /// SafeTensor format
 /// |--8 bytes---|----------N Bytes------|------XYZXYZXYZXYZ--------|
@@ -34,8 +31,10 @@ pub enum ModelType {
     SafeTensor,
 }
 
+#[derive(Debug)]
 pub struct Config {}
 
+#[derive(Debug)]
 pub struct Model {
     tensors: HashMap<String, Tensor>,
     config: Option<Config>,
@@ -50,39 +49,65 @@ impl Model {
     }
 
     pub fn from_safetensor(&mut self, model_path: &str) -> Result<(), Error> {
-        self.tensors = self.parse_model(model_path)?;
+        self.parse_model(model_path)?;
         // self.config = self.parse_config();
         Ok(())
     }
 
-    fn parse_model(&mut self, model_path: &str) -> Result<HashMap<String, Tensor>, Error> {
-        let mut f = BufReader::new(File::open(model_path)?);
-
+    fn parse_model(&mut self, model_path: &str) -> Result<(), Error> {
+        let file = File::open(model_path)?;
+        let mmap = unsafe { Mmap::map(&file)? };
         // reading header_size
-        let mut header_size_buf = [0u8; 8];
-        f.read_exact(&mut header_size_buf)?;
-        let header_size = u64::from_le_bytes(header_size_buf);
+        let header_size = u64::from_le_bytes(mmap[0..8].try_into()?) as usize;
 
         // read header
-        let mut header = vec![0u8; header_size as usize];
-        f.read_exact(&mut header)?;
-        let header_str = std::str::from_utf8(&header)?;
+        let header_str = std::str::from_utf8(&mmap[8..8 + header_size])?;
         let header_json: HashMap<String, serde_json::Value> = serde_json::from_str(header_str)?;
-        // println!("{:?}", header_json);
 
+        let data_offset = 8 + header_size;
         for (name, val) in header_json.into_iter() {
-            // Create the shape vector for the Tensor
-            let json_shape = val.get("shape").unwrap().as_array().unwrap();
-            let mut tensor_shape = Vec::new();
-            for s in json_shape.into_iter() {
-                tensor_shape.push(s.as_u64().unwrap() as usize);
+            if name == "__metadata__" {
+                continue;
             }
+            let shape: Vec<usize> = val
+                .get("shape")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_u64().unwrap() as usize)
+                .collect();
+            let strides = Model::compute_strides(&shape);
 
-            let json_dtype = val.get("dtype").unwrap().as_str().unwrap();
-            // let mut storage = TensorStorage
+            let dtype = DataType::from_str(val.get("dtype").unwrap().as_str().unwrap())?;
 
-            break;
+            let offsets = val.get("data_offsets").unwrap().as_array().unwrap();
+            let begin = offsets[0].as_u64().unwrap() as usize;
+            let end = offsets[1].as_u64().unwrap() as usize;
+
+            let tensor_bytes = &mmap[data_offset + begin..data_offset + end];
+            let storage = TensorStorage::from_bytes(&dtype, tensor_bytes)?;
+
+            self.tensors.insert(
+                name,
+                Tensor::new(shape, strides, tensor::LayoutType::Strided, storage),
+            );
         }
-        Ok(HashMap::new())
+        Ok(())
+    }
+
+    fn compute_strides(shape: &Vec<usize>) -> Vec<usize> {
+        shape
+            .iter()
+            .rev()
+            .scan(1, |acc, &dim| {
+                let stride = *acc;
+                *acc *= dim;
+                Some(stride)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 }

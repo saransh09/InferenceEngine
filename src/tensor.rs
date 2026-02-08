@@ -1,6 +1,6 @@
 use anyhow::{Error, Ok, anyhow};
 use half::{bf16, f16};
-use std::str::FromStr;
+use std::{alloc::LayoutErr, str::FromStr};
 
 #[derive(Debug)]
 pub enum LayoutType {
@@ -73,7 +73,7 @@ impl TensorStorage {
         }
     }
 
-    fn from_bytes(dtype: &DataType, bytes: &[u8]) -> Result<Self, Error> {
+    pub fn from_bytes(dtype: &DataType, bytes: &[u8]) -> Result<Self, Error> {
         match dtype {
             DataType::F32 => {
                 let data: Vec<f32> = bytes
@@ -102,4 +102,20 @@ pub struct Tensor {
     /// Model can have weights of different data types
     /// hence using an enum based pattern matching
     storage: TensorStorage,
+}
+
+impl Tensor {
+    pub fn new(
+        sizes: Vec<usize>,
+        strides: Vec<usize>,
+        layout: LayoutType,
+        storage: TensorStorage,
+    ) -> Self {
+        Self {
+            sizes,
+            strides,
+            layout,
+            storage,
+        }
+    }
 }
