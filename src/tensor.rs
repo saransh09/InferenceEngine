@@ -1,6 +1,6 @@
 use anyhow::{Error, Ok};
 use half::{bf16, f16};
-use std::str::FromStr;
+use std::{ops::Add, ops::AddAssign, str::FromStr};
 
 #[derive(Debug, Clone, Copy)]
 pub enum LayoutType {
@@ -270,5 +270,20 @@ impl Tensor {
             self.layout.clone(),
             storage,
         ))
+    }
+}
+
+impl AddAssign<&Tensor> for Tensor {
+    fn add_assign(&mut self, rhs: &Tensor) {
+        self.add_assign(rhs)
+            .expect("Tensor add_assign failed: shape or dtyp unmatch")
+    }
+}
+
+impl Add<&Tensor> for &Tensor {
+    type Output = Tensor;
+
+    fn add(self, rhs: &Tensor) -> Tensor {
+        Tensor::add(self, rhs).expect("Tensor add failed: shape of dtype unmatch")
     }
 }
