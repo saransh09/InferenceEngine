@@ -156,6 +156,64 @@ impl TensorStorage {
     }
 }
 
+pub enum Scalar {
+    Float(f64),
+    Int(i64),
+}
+
+impl From<f64> for Scalar {
+    fn from(v: f64) -> Self {
+        Scalar::Float(v)
+    }
+}
+
+impl From<f32> for Scalar {
+    fn from(v: f32) -> Self {
+        Scalar::Float(v as f64)
+    }
+}
+impl From<f16> for Scalar {
+    fn from(v: f16) -> Self {
+        Scalar::Float(v.to_f64())
+    }
+}
+
+impl From<bf16> for Scalar {
+    fn from(v: bf16) -> Self {
+        Scalar::Float(v.to_f64())
+    }
+}
+
+impl From<i64> for Scalar {
+    fn from(v: i64) -> Self {
+        Scalar::Int(v)
+    }
+}
+
+impl From<i32> for Scalar {
+    fn from(v: i32) -> Self {
+        Scalar::Int(v as i64)
+    }
+}
+
+impl From<i16> for Scalar {
+    fn from(v: i16) -> Self {
+        Scalar::Int(v as i64)
+    }
+}
+
+impl From<i8> for Scalar {
+    fn from(v: i8) -> Self {
+        Scalar::Int(v as i64)
+    }
+}
+
+impl From<u8> for Scalar {
+    fn from(v: u8) -> Self {
+        Scalar::Int(v as i64)
+    }
+}
+
 /// Tensor is a view of flat buffer
 /// Tensor contains the actual data and some metadata
 /// associated with that representation of the data
@@ -196,19 +254,6 @@ macro_rules! elementwise_binary {
                 TensorStorage::$variant(a.iter().zip(b.iter()).map(|(x,y)| x $op y).collect())
             } )*
             _ => return Err(anyhow::anyhow!("dtype mismatch or unsupported")),
-        }
-    };
-}
-
-macro_rules! scalar_op {
-    ($storage: expr, $scalar: expr, $op: tt, $($variant:ident => $scalar_type:ty),*) => {
-        match storage {
-            $(
-                TensorStorage::$variant(v) => TensorStorage::variant(
-                    v.iter().map(|x| x $op ($scalar as $scalar_type)).collect()
-                ),
-            )*
-            _ => return Err(anyhow::anyhow!("Unsupported dtype")),
         }
     };
 }
@@ -289,7 +334,57 @@ impl Tensor {
         ))
     }
 
-    pub fn scalar_mul(&self, scaler: f64) {}
+    fn scalar_mul_f64(&self, scalar: f64) -> Result<Tensor, Error> {
+        let storage = match &self.storage {
+            TensorStorage::F64(v) => TensorStorage::F64(v.iter().map(|x| x * scalar).collect()),
+            TensorStorage::F32(v) => {
+                TensorStorage::F32(v.iter().map(|x| x * scalar as f32).collect())
+            }
+            TensorStorage::F16(v) => TensorStorage::F16(
+                v.iter()
+                    .map(|x| f16::from_f64(x.to_f64() * scalar))
+                    .collect(),
+            ),
+            TensorStorage::BF16(v) => TensorStorage::BF16(
+                v.iter()
+                    .map(|x| bf16::from_f64(x.to_f64() * scalar))
+                    .collect(),
+            ),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Float scalar mul not supported for integer tensors"
+                ));
+            }
+        };
+        Ok(Tensor::new(self.shape.clone(), self.layout, storage))
+    }
+
+    fn scalar_mul_i64(&self, scalar: i64) -> Result<Tensor, Error> {
+        let storage = match &self.storage {
+            TensorStorage::I64(v) => TensorStorage::I64(v.iter().map(|x| x * scalar).collect()),
+            TensorStorage::I32(v) => {
+                TensorStorage::I32(v.iter().map(|x| x * scalar as i32).collect())
+            }
+            TensorStorage::I16(v) => {
+                TensorStorage::I16(v.iter().map(|x| x * scalar as i16).collect())
+            }
+            TensorStorage::I8(v) => TensorStorage::I8(v.iter().map(|x| x * scalar as i8).collect()),
+            TensorStorage::U8(v) => TensorStorage::U8(v.iter().map(|x| x * scalar as u8).collect()),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Int scalar mul not supported for float tensors"
+                ));
+            }
+        };
+        Ok(Tensor::new(self.shape.clone(), self.layout, storage))
+    }
+
+    pub fn scalar_mul(&self, scalar: impl Into<Scalar>) -> Result<Tensor, Error> {
+        match scalar.into() {
+            Scalar::Float(s) => self.scalar_mul_f64(s),
+            Scalar::Int(s) => self.scalar_mul_i64(s),
+        }
+    }
 }
 
 impl AddAssign<&Tensor> for Tensor {
