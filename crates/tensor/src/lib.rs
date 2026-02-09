@@ -1,13 +1,16 @@
 use anyhow::{Error, Ok};
 use half::{bf16, f16};
-use std::{ops::Add, ops::AddAssign, str::FromStr};
+use std::{
+    ops::{Add, AddAssign},
+    str::FromStr,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LayoutType {
     Strided,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DataType {
     F64,
     F32,
@@ -81,6 +84,23 @@ macro_rules! zeros_impl {
                 DataType::$variant => Ok(TensorStorage::$variant(vec![<$rust_type>::default(); $count])),
             )*
             _ => Err(anyhow::anyhow!("Not implemented for dtype: {:?}", $dtype)),
+        }
+    };
+}
+
+macro_rules! matmul_impl {
+    ($a:expr, $b:expr, $c:expr, $m:expr, $n:expr, $k:expr, $($variant:ident),*) => {
+        match ($a, $b, $c) {
+            $( (TensorStorage::$variant(a), TensorStorage::$variant(b), TensorStorage::$variant(c)) => {
+                for i in 0..$m {
+                    for j in 0..$n {
+                        for p in 0..$k {
+                            c[i * $n + j] += a[i * $k + p] * b[p * $n + j];
+                        }
+                    }
+                }
+            } )*
+            _ => return Err(anyhow::anyhow!("dtype mismatch or unsupported")),
         }
     };
 }
@@ -269,7 +289,7 @@ impl Tensor {
         }
     }
 
-    fn compute_strides(shape: &Vec<usize>) -> Vec<usize> {
+    pub fn compute_strides(shape: &Vec<usize>) -> Vec<usize> {
         shape
             .iter()
             .rev()
@@ -385,12 +405,77 @@ impl Tensor {
             Scalar::Int(s) => self.scalar_mul_i64(s),
         }
     }
+
+    pub fn mul(&self, other: &Tensor) -> Result<Tensor, Error> {
+        // trying matrix multiplication
+
+        // let's start with just 2D matrices
+        if self.shape.len() != 2 || other.shape.len() != 2 {
+            return Err(anyhow::anyhow!(
+                "Matrix multiplication only implemented for 2D Tensors "
+            ));
+        }
+        if self.shape[self.shape.len() - 1] != other.shape[0] {
+            return Err(anyhow::anyhow!("Tensor multiplication incompatability"));
+        }
+        if self.storage.dtype() != other.storage.dtype() {
+            return Err(anyhow::anyhow!("The types of tensors should be the same"));
+        }
+        let m = self.shape[0];
+        let k = self.shape[1];
+        let n = other.shape[1];
+        let new_shape = vec![m, n];
+        let mut res = Tensor::new(
+            new_shape,
+            LayoutType::Strided,
+            TensorStorage::zeros(&self.storage.dtype(), m * n)?,
+        );
+        match (&self.storage, &other.storage, &mut res.storage) {
+            (TensorStorage::F16(a), TensorStorage::F16(b), TensorStorage::F16(c)) => {
+                for i in 0..m {
+                    for j in 0..n {
+                        let mut sum = 0.0_f32;
+                        for p in 0..k {
+                            sum += a[i * k + p].to_f32() * b[p * n + j].to_f32();
+                        }
+                        c[i * n + j] = f16::from_f32(sum);
+                    }
+                }
+            }
+            (TensorStorage::BF16(a), TensorStorage::BF16(b), TensorStorage::BF16(c)) => {
+                for i in 0..m {
+                    for j in 0..n {
+                        let mut sum = 0.0_f32;
+                        for p in 0..k {
+                            sum += a[i * k + p].to_f32() * b[p * n + j].to_f32();
+                        }
+                        c[i * n + j] = bf16::from_f32(sum);
+                    }
+                }
+            }
+            _ => matmul_impl!(
+                &self.storage,
+                &other.storage,
+                &mut res.storage,
+                m,
+                n,
+                k,
+                F64,
+                F32,
+                I64,
+                I32,
+                I16,
+                I8
+            ),
+        }
+        Ok(res)
+    }
 }
 
 impl AddAssign<&Tensor> for Tensor {
     fn add_assign(&mut self, rhs: &Tensor) {
         self.add_assign(rhs)
-            .expect("Tensor add_assign failed: shape or dtyp unmatch")
+            .expect("Tensor add_assign failed: shape or dtype unmatch")
     }
 }
 
