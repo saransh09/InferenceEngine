@@ -1,6 +1,3 @@
-pub mod model_parser;
-pub mod tensor;
-
 use std::io::Error;
 
 use model_parser::*;

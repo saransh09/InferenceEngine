@@ -1,7 +1,7 @@
-use crate::tensor::{self, DataType, Tensor, TensorStorage};
 use anyhow::{Error, Ok};
 use memmap2::Mmap;
 use std::{collections::HashMap, fs::File, str::FromStr};
+use tensor::{DataType, Tensor, TensorStorage};
 
 /// SafeTensor format
 /// |--8 bytes---|----------N Bytes------|------XYZXYZXYZXYZ--------|

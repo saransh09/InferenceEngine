@@ -1,11 +1,2 @@
-[package]
-name = "InferenceEngine"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-half = "2.7.1"
-anyhow = "1.0.101"
-serde = "1.0.228"
-serde_json = "1.0.149"
-memmap2 = "0.9.9"
+[workspace]
+members = ["crates/*"]

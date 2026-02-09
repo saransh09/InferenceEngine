@@ -1,0 +1,8 @@
+[package]
+name = "inference-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tensor = { path = "../tensor" }
+model-parser = { path = "../model-parser"}

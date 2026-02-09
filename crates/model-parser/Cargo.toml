@@ -1,0 +1,11 @@
+[package]
+name = "model-parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tensor = { path = "../tensor" }
+serde = "1.0.228"
+serde_json = "1.0.149"
+memmap2 = "0.9.9"
+anyhow = "1.0.101"

@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "InferenceEngine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "half",
- "memmap2",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -43,6 +32,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "inference-engine"
+version = "0.1.0"
+dependencies = [
+ "model-parser",
+ "tensor",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -67,6 +64,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "model-parser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "tensor",
 ]
 
 [[package]]
@@ -138,6 +146,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tensor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "half",
 ]
 
 [[package]]

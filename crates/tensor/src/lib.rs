@@ -196,6 +196,19 @@ macro_rules! elementwise_binary {
     };
 }
 
+macro_rules! scalar_op {
+    ($storage: expr, $scalar: expr, $op: tt, $($variant:ident => $scalar_type:ty),*) => {
+        match storage {
+            $(
+                TensorStorage::$variant(v) => TensorStorage::variant(
+                    v.iter().map(|x| x $op ($scalar as $scalar_type)).collect()
+                ),
+            )*
+            _ => return Err(anyhow::anyhow!("Unsupported dtype")),
+        }
+    };
+}
+
 impl Tensor {
     pub fn new(shape: Vec<usize>, layout: LayoutType, storage: TensorStorage) -> Self {
         let strides = Tensor::compute_strides(&shape);
@@ -271,6 +284,8 @@ impl Tensor {
             storage,
         ))
     }
+
+    pub fn scalar_mul(&self, scaler: f64) {}
 }
 
 impl AddAssign<&Tensor> for Tensor {
