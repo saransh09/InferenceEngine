@@ -2,12 +2,12 @@ use anyhow::{Error, Ok};
 use half::{bf16, f16};
 use std::{ops::Add, ops::AddAssign, str::FromStr};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LayoutType {
     Strided,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum DataType {
     F64,
     F32,
@@ -43,7 +43,7 @@ impl FromStr for DataType {
 
 /// Enum store for the different possible datatypes
 /// that can occur in
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TensorStorage {
     F64(Vec<f64>),
     F32(Vec<f32>),
@@ -150,13 +150,17 @@ impl TensorStorage {
             TensorStorage::BOOL(v) => v.len(),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Tensor is a view of flat buffer
 /// Tensor contains the actual data and some metadata
 /// associated with that representation of the data
 /// The size and strides can help you access the data
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Tensor {
     /// Tensor can be 2D / 3D, therefore, using vector to represent the size
     shape: Vec<usize>,
@@ -300,5 +304,282 @@ impl Add<&Tensor> for &Tensor {
 
     fn add(self, rhs: &Tensor) -> Tensor {
         Tensor::add(self, rhs).expect("Tensor add failed: shape of dtype unmatch")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_strides_1d() {
+        let shape = vec![5];
+        assert_eq!(Tensor::compute_strides(&shape), vec![1]);
+    }
+
+    #[test]
+    fn test_compute_stride_2d() {
+        let shape = vec![3, 4];
+        assert_eq!(Tensor::compute_strides(&shape), vec![4, 1]);
+    }
+
+    #[test]
+    fn test_compute_stride_3d() {
+        let shape = vec![2, 3, 4];
+        assert_eq!(Tensor::compute_strides(&shape), vec![12, 4, 1]);
+    }
+
+    #[test]
+    fn test_compute_stride_4d() {
+        let shape = vec![2, 3, 4, 5];
+        assert_eq!(Tensor::compute_strides(&shape), [60, 20, 5, 1]);
+    }
+
+    #[test]
+    fn test_storage_len_f32() {
+        assert_eq!(
+            TensorStorage::F32(vec![
+                1 as f32, 2 as f32, 3 as f32, 4 as f32, 5 as f32, 6 as f32
+            ])
+            .len(),
+            6
+        );
+    }
+
+    #[test]
+    fn test_storage_dtype_f32() {
+        assert_eq!(
+            TensorStorage::F32(vec![
+                1 as f32, 2 as f32, 3 as f32, 4 as f32, 5 as f32, 6 as f32
+            ])
+            .dtype(),
+            DataType::F32
+        )
+    }
+
+    #[test]
+    fn test_from_bytes_f32() {
+        let bytes: [u8; 12] = [
+            0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x40, 0x40,
+        ];
+        let v = TensorStorage::from_bytes(&DataType::F32, &bytes).unwrap();
+        assert_eq!(v, TensorStorage::F32(vec![1.0_f32, 2.0_f32, 3.0_f32]));
+    }
+
+    #[test]
+    fn test_from_bytes_i32() {
+        let bytes: [u8; 12] = [
+            0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+        ];
+        let v = TensorStorage::from_bytes(&DataType::I32, &bytes).unwrap();
+        assert_eq!(v, TensorStorage::I32(vec![1_i32, 2_i32, 3_i32]));
+    }
+
+    #[test]
+    fn test_zeros_f32() {
+        let zero = TensorStorage::zeros(&DataType::F32, 10).unwrap();
+        assert_eq!(zero, TensorStorage::F32(vec![0 as f32; 10]));
+    }
+
+    #[test]
+    fn test_tensor_new() {
+        let t = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::zeros(&DataType::F32, 24).unwrap(),
+        );
+        assert_eq!(t.shape, vec![2, 3, 4]);
+        assert_eq!(t.layout, LayoutType::Strided);
+        assert_eq!(t.strides, vec![12, 4, 1]);
+        assert_eq!(t.storage, TensorStorage::F32(vec![0_f32; 24]));
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let ts1 = TensorStorage::F32(vec![]);
+        assert!(ts1.is_empty() == true);
+        let ts2 = TensorStorage::F32(vec![1_f32; 10]);
+        assert!(ts2.is_empty() == false);
+    }
+
+    #[test]
+    fn test_add_assign_f32_same_shape() {
+        let mut t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        t1.add_assign(&t2);
+        assert_eq!(
+            t1,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![2_f32; 2 * 3 * 4]),
+            )
+        )
+    }
+
+    #[test]
+    fn test_add_f32_same_shape() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t3 = t1.add(&t2).unwrap();
+        // original tensor unchanged
+        assert_eq!(
+            t1,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+            )
+        );
+        // new tensor
+        assert_eq!(
+            t3,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![2_f32; 2 * 3 * 4]),
+            )
+        )
+    }
+
+    #[test]
+    fn test_add_bf16_same_shape() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::BF16(vec![bf16::from_f32(1_f32); 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::BF16(vec![bf16::from_f32(1_f32); 2 * 3 * 4]),
+        );
+        let t3 = t1.add(&t2).unwrap();
+        // original tensor unchanged
+        assert_eq!(
+            t1,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::BF16(vec![bf16::from_f32(1_f32); 2 * 3 * 4]),
+            )
+        );
+        // new tensor
+        assert_eq!(
+            t3,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::BF16(vec![bf16::from_f32(2_f32); 2 * 3 * 4]),
+            )
+        )
+    }
+
+    #[test]
+    fn test_add_shape_mismatch_error() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 5],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 5]),
+        );
+        let t3 = t1.add(&t2);
+        assert!(t3.is_err());
+        let err = t3.expect_err("Expected shape mismatch error");
+        assert!(err.to_string().contains("Shape mismatch"));
+    }
+
+    #[test]
+    fn test_add_dtype_mismatch_error() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::I32(vec![1 as i32; 2 * 3 * 4]),
+        );
+        let t3 = t1.add(&t2);
+        assert!(t3.is_err());
+        let err = t3.expect_err("dtype mismatch");
+        assert!(err.to_string().contains("dtype mismatch"));
+    }
+
+    #[test]
+    fn test_add_assign_f32_same_shape_opertor() {
+        let mut t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        t1 += &t2;
+        assert_eq!(
+            t1,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![2_f32; 2 * 3 * 4]),
+            )
+        )
+    }
+
+    #[test]
+    fn test_add_f32_same_shape_operator() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t3 = &t1 + &t2;
+        // original tensor unchanged
+        assert_eq!(
+            t1,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+            )
+        );
+        // new tensor
+        assert_eq!(
+            t3,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![2_f32; 2 * 3 * 4]),
+            )
+        )
     }
 }
