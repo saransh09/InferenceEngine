@@ -93,13 +93,26 @@ macro_rules! zeros_impl {
 }
 
 macro_rules! matmul_impl {
-    ($a:expr, $b:expr, $c:expr, $m:expr, $n:expr, $k:expr, $($variant:ident),*) => {
+    (
+        $a:expr, $b:expr, $c:expr,
+        $a_strides:expr, $b_strides:expr, $c_strides:expr,
+        $batch_dims:expr, $total_batches:expr,
+        $m:expr, $n:expr, $k:expr,
+        $($variant:ident),*
+    ) => {
         match ($a, $b, $c) {
             $( (TensorStorage::$variant(a), TensorStorage::$variant(b), TensorStorage::$variant(c)) => {
-                for i in 0..$m {
-                    for j in 0..$n {
-                        for p in 0..$k {
-                            c[i * $n + j] += a[i * $k + p] * b[p * $n + j];
+                for batch_idx in 0..$total_batches {
+                    let batch_coords = Tensor::index_to_coords(batch_idx, $batch_dims);
+                    let a_offset = Tensor::flat_index(&batch_coords, $a_strides).unwrap();
+                    let b_offset = Tensor::flat_index(&batch_coords, $b_strides).unwrap();
+                    let c_offset = Tensor::flat_index(&batch_coords, $c_strides).unwrap();
+                    for i in 0..$m {
+                        for j in 0..$n {
+                            for p in 0..$k {
+                                c[c_offset + i * $n + j] +=
+                                    a[a_offset + i * $k + p] * b[b_offset + p * $n + j];
+                            }
                         }
                     }
                 }
@@ -410,68 +423,115 @@ impl Tensor {
         }
     }
 
-    pub fn flat_index(&self, coords: &Vec<usize>) -> Result<usize, Error> {
-        if self.strides.len() != coords.len() {
+    pub fn flat_index(coords: &Vec<usize>, strides: &[usize]) -> Result<usize, Error> {
+        if strides.len() != coords.len() {
             return Err(anyhow::anyhow!(
                 "Coords should have the same dimensions as the strides"
             ));
         }
-        Ok(self
-            .strides
-            .iter()
-            .zip(coords.iter())
-            .map(|(s, c)| s * c)
-            .sum())
+        Ok(strides.iter().zip(coords.iter()).map(|(s, c)| s * c).sum())
     }
 
-    /// Currently, we have a naive approach!
-    /// First of all, this multiplication has to be batched
-    /// Also, there is potential for a lot of improvement here
-    /// therefore, we can look into that
-    pub fn mul(&self, other: &Tensor) -> Result<Tensor, Error> {
-        // trying matrix multiplication
-
-        // let's start with just 2D matrices
-        if self.shape.len() != 2 || other.shape.len() != 2 {
-            return Err(anyhow::anyhow!(
-                "Matrix multiplication only implemented for 2D Tensors "
-            ));
+    pub fn index_to_coords(idx: usize, batch_dims: &[usize]) -> Vec<usize> {
+        let mut flat_idx = idx;
+        let mut batch_coords = Vec::<usize>::new();
+        for i in (0..batch_dims.len()).rev() {
+            batch_coords.push(flat_idx % batch_dims[i]);
+            flat_idx /= batch_dims[i];
         }
-        if self.shape[self.shape.len() - 1] != other.shape[0] {
+        batch_coords.reverse();
+        batch_coords
+    }
+
+    /// The tensor multiplication needed here is not the generalised
+    /// tensor mutliplication (but in general Batch Matrix Multiplication)
+    pub fn mul(&self, other: &Tensor) -> Result<Tensor, Error> {
+        // we say that, first we ensure that the shape of the tensor is of the same lengths
+        if self.shape.len() != other.shape.len() {
+            return Err(anyhow::anyhow!("Matrix shape should be in same dimension"));
+        }
+        // in reality (we just perform a 2D matrix operation but we loop over)
+        // [B,H,M,K] @ [B,H,K,N] = [B,H,M,N]
+        // for now not supporting broadcasting operation
+        // In the next iteration, this has to be relaxed as broadcasting operation is required
+        // in GPT models  Linear layers | [B,S,D] @ [D,D']
+        for i in 0..self.shape.len() - 2 {
+            if self.shape[i] != other.shape[i] {
+                return Err(anyhow::anyhow!("The batch dimensions should be equal"));
+            }
+        }
+
+        // The condition for 2D matrix multiplication should be met
+        if self.shape[self.shape.len() - 1] != other.shape[self.shape.len() - 2] {
             return Err(anyhow::anyhow!("Tensor multiplication incompatability"));
         }
+
         if self.storage.dtype() != other.storage.dtype() {
             return Err(anyhow::anyhow!("The types of tensors should be the same"));
         }
-        let m = self.shape[0];
-        let k = self.shape[1];
-        let n = other.shape[1];
-        let new_shape = vec![m, n];
+
+        let m = self.shape[self.shape.len() - 2];
+        let k = self.shape[self.shape.len() - 1];
+        let n = other.shape[other.shape.len() - 1];
+        let new_shape: Vec<usize> = self.shape[..self.shape.len() - 2]
+            .iter()
+            .copied()
+            .chain([
+                self.shape[self.shape.len() - 2],
+                other.shape[other.shape.len() - 1],
+            ])
+            .collect();
+        let new_storage_size = new_shape.iter().product::<usize>();
         let mut res = Tensor::new(
             new_shape,
             LayoutType::Strided,
-            TensorStorage::zeros(&self.storage.dtype(), m * n)?,
+            TensorStorage::zeros(&self.storage.dtype(), new_storage_size)?,
         );
+        let batch_dims = &self.shape[..&self.shape.len() - 2];
+        let total_batches = batch_dims.iter().product::<usize>();
+
         match (&self.storage, &other.storage, &mut res.storage) {
             (TensorStorage::F16(a), TensorStorage::F16(b), TensorStorage::F16(c)) => {
-                for i in 0..m {
-                    for j in 0..n {
-                        let mut sum = 0.0_f32;
-                        for p in 0..k {
-                            sum += a[i * k + p].to_f32() * b[p * n + j].to_f32();
+                for batch_idx in 0..total_batches {
+                    let batch_coords = Tensor::index_to_coords(batch_idx, batch_dims);
+                    let a_offset =
+                        Tensor::flat_index(&batch_coords, &self.strides[..batch_dims.len()])?;
+                    let b_offset =
+                        Tensor::flat_index(&batch_coords, &other.strides[..batch_dims.len()])?;
+                    let c_offet =
+                        Tensor::flat_index(&batch_coords, &res.strides[..batch_dims.len()])?;
+
+                    for i in 0..m {
+                        for j in 0..n {
+                            let mut sum = 0.0_f32;
+                            for p in 0..k {
+                                sum += a[a_offset + i * k + p].to_f32()
+                                    * b[b_offset + p * n + j].to_f32();
+                            }
+                            c[c_offet + i * n + j] = f16::from_f32(sum);
                         }
-                        c[i * n + j] = f16::from_f32(sum);
                     }
                 }
             }
             (TensorStorage::BF16(a), TensorStorage::BF16(b), TensorStorage::BF16(c)) => {
-                for i in 0..m {
-                    for j in 0..n {
-                        let mut sum = 0.0_f32;
-                        for p in 0..k {
-                            sum += a[i * k + p].to_f32() * b[p * n + j].to_f32();
+                for batch_idx in 0..total_batches {
+                    let batch_coords = Tensor::index_to_coords(batch_idx, batch_dims);
+                    let a_offset =
+                        Tensor::flat_index(&batch_coords, &self.strides[..batch_dims.len()])?;
+                    let b_offset =
+                        Tensor::flat_index(&batch_coords, &other.strides[..batch_dims.len()])?;
+                    let c_offet =
+                        Tensor::flat_index(&batch_coords, &res.strides[..batch_dims.len()])?;
+
+                    for i in 0..m {
+                        for j in 0..n {
+                            let mut sum = 0.0_f32;
+                            for p in 0..k {
+                                sum += a[a_offset + i * k + p].to_f32()
+                                    * b[b_offset + p * n + j].to_f32();
+                            }
+                            c[c_offet + i * n + j] = bf16::from_f32(sum);
                         }
-                        c[i * n + j] = bf16::from_f32(sum);
                     }
                 }
             }
@@ -479,6 +539,11 @@ impl Tensor {
                 &self.storage,
                 &other.storage,
                 &mut res.storage,
+                &self.strides[..batch_dims.len()],
+                &other.strides[..batch_dims.len()],
+                &res.strides[..batch_dims.len()],
+                batch_dims,
+                total_batches,
                 m,
                 n,
                 k,
@@ -850,6 +915,40 @@ mod tests {
         let matrix_product = t1.mul(&t2).unwrap();
         assert_eq!(matrix_product.shape, vec![2, 2]);
         assert_eq!(matrix_product.storage, TensorStorage::F64(vec![3_f64; 4]));
+    }
+
+    #[test]
+    fn test_matrix_mul_3_d_compatible_shapes() {
+        let t1 = Tensor::new(
+            vec![2, 2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 2 * 3]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3, 2],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 2 * 3]),
+        );
+        let matrix_product = t1.mul(&t2).unwrap();
+        assert_eq!(matrix_product.shape, vec![2, 2, 2]);
+        assert_eq!(matrix_product.storage, TensorStorage::F64(vec![3_f64; 8]));
+    }
+
+    #[test]
+    fn test_matrix_mul_4_d_compatible_shapes() {
+        let t1 = Tensor::new(
+            vec![3, 2, 2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 3 * 2 * 2 * 3]),
+        );
+        let t2 = Tensor::new(
+            vec![3, 2, 3, 2],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 3 * 2 * 2 * 3]),
+        );
+        let matrix_product = t1.mul(&t2).unwrap();
+        assert_eq!(matrix_product.shape, vec![3, 2, 2, 2]);
+        assert_eq!(matrix_product.storage, TensorStorage::F64(vec![3_f64; 24]));
     }
 
     #[test]
