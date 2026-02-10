@@ -406,6 +406,10 @@ impl Tensor {
         }
     }
 
+    /// Currently, we have a naive approach!
+    /// First of all, this multiplication has to be batched
+    /// Also, there is potential for a lot of improvement here
+    /// therefore, we can look into that
     pub fn mul(&self, other: &Tensor) -> Result<Tensor, Error> {
         // trying matrix multiplication
 
@@ -469,6 +473,20 @@ impl Tensor {
             ),
         }
         Ok(res)
+    }
+
+    /// For the Transpose, we just need to reverse the strides
+    /// No need for data copying, this becomes an O(1) operation
+    /// This is a zero cost view of the Tensor, which is alright
+    /// However, during computations it might be worthwhile to
+    /// recompute
+    pub fn T(&mut self) {
+        self.strides.reverse();
+        self.shape.reverse();
+    }
+
+    pub fn transpose(&mut self) {
+        self.T();
     }
 }
 
@@ -761,5 +779,91 @@ mod tests {
                 TensorStorage::F32(vec![2_f32; 2 * 3 * 4]),
             )
         )
+    }
+
+    #[test]
+    fn test_mul_scalar_f32() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        let t = t1.scalar_mul(4_f32).unwrap();
+        assert_eq!(
+            t,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::F32(vec![4_f32; 2 * 3 * 4])
+            )
+        );
+    }
+
+    #[test]
+    fn test_mul_scalar_i32() {
+        let t1 = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::I32(vec![1_i32; 2 * 3 * 4]),
+        );
+        let t = t1.scalar_mul(4_i32).unwrap();
+        assert_eq!(
+            t,
+            Tensor::new(
+                vec![2, 3, 4],
+                LayoutType::Strided,
+                TensorStorage::I32(vec![4_i32; 2 * 3 * 4])
+            )
+        );
+    }
+
+    #[test]
+    fn test_matrix_mul_2_d_compatible_shapes() {
+        let t1 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 3]),
+        );
+        let t2 = Tensor::new(
+            vec![3, 2],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 3]),
+        );
+        let matrix_product = t1.mul(&t2).unwrap();
+        assert_eq!(matrix_product.shape, vec![2, 2]);
+        assert_eq!(matrix_product.storage, TensorStorage::F64(vec![3_f64; 4]));
+    }
+
+    #[test]
+    fn test_matrix_mul_incompatible_shape() {
+        let t1 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 3]),
+        );
+        let t2 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 3]),
+        );
+        let matrix_product = t1.mul(&t2);
+        assert!(matrix_product.is_err());
+        let err = matrix_product.expect_err("incompatible shape");
+        assert!(
+            err.to_string()
+                .contains("Tensor multiplication incompatability")
+        );
+    }
+
+    #[test]
+    fn test_transpose_tensor() {
+        let mut t = Tensor::new(
+            vec![2, 3, 4],
+            LayoutType::Strided,
+            TensorStorage::F32(vec![1_f32; 2 * 3 * 4]),
+        );
+        t.T();
+        assert_eq!(t.shape, vec![4, 3, 2]);
+        assert_eq!(t.strides, vec![1, 4, 12]);
     }
 }
