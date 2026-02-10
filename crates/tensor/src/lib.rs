@@ -3,8 +3,12 @@ use half::{bf16, f16};
 use std::{
     ops::{Add, AddAssign},
     str::FromStr,
+    usize,
 };
 
+/// This is added based on the reference article
+/// Apparently there can be different layout strategies
+/// For now, only Strided will be a valid layout type
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LayoutType {
     Strided,
@@ -404,6 +408,20 @@ impl Tensor {
             Scalar::Float(s) => self.scalar_mul_f64(s),
             Scalar::Int(s) => self.scalar_mul_i64(s),
         }
+    }
+
+    pub fn flat_index(&self, coords: &Vec<usize>) -> Result<usize, Error> {
+        if self.strides.len() != coords.len() {
+            return Err(anyhow::anyhow!(
+                "Coords should have the same dimensions as the strides"
+            ));
+        }
+        Ok(self
+            .strides
+            .iter()
+            .zip(coords.iter())
+            .map(|(s, c)| s * c)
+            .sum())
     }
 
     /// Currently, we have a naive approach!
