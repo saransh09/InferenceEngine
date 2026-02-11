@@ -98,6 +98,7 @@ macro_rules! matmul_impl {
         $a_strides:expr, $b_strides:expr, $c_strides:expr,
         $batch_dims:expr, $total_batches:expr,
         $m:expr, $n:expr, $k:expr,
+        $ars: expr, $acs: expr, $brs: expr, $bcs: expr,
         $($variant:ident),*
     ) => {
         match ($a, $b, $c) {
@@ -111,7 +112,7 @@ macro_rules! matmul_impl {
                         for j in 0..$n {
                             for p in 0..$k {
                                 c[c_offset + i * $n + j] +=
-                                    a[a_offset + i * $k + p] * b[b_offset + p * $n + j];
+                                    a[a_offset + i * $ars + p * $acs] * b[b_offset + p * $brs + j * $bcs];
                             }
                         }
                     }
@@ -490,6 +491,12 @@ impl Tensor {
         let batch_dims = &self.shape[..&self.shape.len() - 2];
         let total_batches = batch_dims.iter().product::<usize>();
 
+        let rank = self.shape.len();
+        let a_row_stride = self.strides[rank - 2];
+        let a_col_stride = self.strides[rank - 1];
+        let b_row_stride = other.strides[rank - 2];
+        let b_col_stride = other.strides[rank - 1];
+
         match (&self.storage, &other.storage, &mut res.storage) {
             (TensorStorage::F16(a), TensorStorage::F16(b), TensorStorage::F16(c)) => {
                 for batch_idx in 0..total_batches {
@@ -505,8 +512,8 @@ impl Tensor {
                         for j in 0..n {
                             let mut sum = 0.0_f32;
                             for p in 0..k {
-                                sum += a[a_offset + i * k + p].to_f32()
-                                    * b[b_offset + p * n + j].to_f32();
+                                sum += a[a_offset + i * a_row_stride + p * a_col_stride].to_f32()
+                                    * b[b_offset + p * b_row_stride + j * b_col_stride].to_f32();
                             }
                             c[c_offet + i * n + j] = f16::from_f32(sum);
                         }
@@ -527,8 +534,8 @@ impl Tensor {
                         for j in 0..n {
                             let mut sum = 0.0_f32;
                             for p in 0..k {
-                                sum += a[a_offset + i * k + p].to_f32()
-                                    * b[b_offset + p * n + j].to_f32();
+                                sum += a[a_offset + i * a_row_stride + p * a_col_stride].to_f32()
+                                    * b[b_offset + p * b_row_stride + j * b_col_stride].to_f32();
                             }
                             c[c_offet + i * n + j] = bf16::from_f32(sum);
                         }
@@ -547,6 +554,10 @@ impl Tensor {
                 m,
                 n,
                 k,
+                a_row_stride,
+                a_col_stride,
+                b_row_stride,
+                b_col_stride,
                 F64,
                 F32,
                 I64,
@@ -948,7 +959,7 @@ mod tests {
         assert_eq!(matrix_product_3.shape, vec![2, 2]);
         assert_eq!(
             matrix_product_3.storage,
-            TensorStorage::F64(vec![22_f64, 28_f64, 49_f64, 64_f64])
+            TensorStorage::F64(vec![14_f64, 32_f64, 32_f64, 77_f64])
         );
     }
 
@@ -967,7 +978,10 @@ mod tests {
         t2.T();
         let t3 = t1.mul(&t2).unwrap();
         assert_eq!(t3.shape, vec![2, 2]);
-        assert_eq!(t3.storage, TensorStorage::F64(vec![3_f64; 4]));
+        assert_eq!(
+            t3.storage,
+            TensorStorage::F64(vec![6_f64, 6_f64, 15_f64, 15_f64])
+        );
     }
 
     #[test]
