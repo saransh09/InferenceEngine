@@ -1,6 +1,6 @@
-use anyhow::{Error, Ok};
+use anyhow::{Error, Ok, anyhow};
 use memmap2::Mmap;
-use std::{collections::HashMap, fs::File, str::FromStr};
+use std::{collections::HashMap, fs::File, path::Path, str::FromStr};
 use tensor::{DataType, Tensor, TensorStorage};
 
 /// SafeTensor format
@@ -48,13 +48,26 @@ impl Model {
         }
     }
 
-    pub fn from_safetensor(&mut self, model_path: &str) -> Result<(), Error> {
-        self.parse_model(model_path)?;
-        // self.config = self.parse_config();
-        Ok(())
+    pub fn load_model(path: &str) -> Result<Model, Error> {
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .ok_or_else(|| anyhow!("Could not determine file extension"))?;
+
+        match extension {
+            "safetensors" => Model::from_safetensor(path),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Not implemented for extension {:?}",
+                    extension
+                ));
+            }
+        }
     }
 
-    fn parse_model(&mut self, model_path: &str) -> Result<(), Error> {
+    fn from_safetensor(model_path: &str) -> Result<Model, Error> {
+        let mut model = Model::new();
+
         let file = File::open(model_path)?;
         let mmap = unsafe { Mmap::map(&file)? };
         // reading header_size
@@ -87,11 +100,11 @@ impl Model {
             let tensor_bytes = &mmap[data_offset + begin..data_offset + end];
             let storage = TensorStorage::from_bytes(&dtype, tensor_bytes)?;
 
-            self.tensors.insert(
+            model.tensors.insert(
                 name,
                 Tensor::new(shape, tensor::LayoutType::Strided, storage),
             );
         }
-        Ok(())
+        Ok(model)
     }
 }
