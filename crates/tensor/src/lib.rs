@@ -915,6 +915,59 @@ mod tests {
         let matrix_product = t1.mul(&t2).unwrap();
         assert_eq!(matrix_product.shape, vec![2, 2]);
         assert_eq!(matrix_product.storage, TensorStorage::F64(vec![3_f64; 4]));
+
+        let t3 = Tensor::new(
+            vec![2, 2],
+            LayoutType::Strided,
+            TensorStorage::I64(vec![1_i64, 2_i64, 3_i64, 4_i64]),
+        );
+        let t4 = Tensor::new(
+            vec![2, 2],
+            LayoutType::Strided,
+            TensorStorage::I64(vec![5_i64, 6_i64, 7_i64, 8_i64]),
+        );
+        let matrix_product_2 = t3.mul(&t4).unwrap();
+        assert_eq!(matrix_product_2.shape, vec![2, 2]);
+        assert_eq!(
+            matrix_product_2.storage,
+            TensorStorage::I64(vec![19_i64, 22_i64, 43_i64, 50_i64])
+        );
+
+        let t5 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64, 6_f64]),
+        );
+        let mut t6 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64, 6_f64]),
+        );
+        t6.T();
+        let matrix_product_3 = t5.mul(&t6).unwrap();
+        assert_eq!(matrix_product_3.shape, vec![2, 2]);
+        assert_eq!(
+            matrix_product_3.storage,
+            TensorStorage::F64(vec![22_f64, 28_f64, 49_f64, 64_f64])
+        );
+    }
+
+    #[test]
+    fn test_matrix_mul_with_transpose() {
+        let t1 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64, 6_f64]),
+        );
+        let mut t2 = Tensor::new(
+            vec![2, 3],
+            LayoutType::Strided,
+            TensorStorage::F64(vec![1_f64; 2 * 3]),
+        );
+        t2.T();
+        let t3 = t1.mul(&t2).unwrap();
+        assert_eq!(t3.shape, vec![2, 2]);
+        assert_eq!(t3.storage, TensorStorage::F64(vec![3_f64; 4]));
     }
 
     #[test]
